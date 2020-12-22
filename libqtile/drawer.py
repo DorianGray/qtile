@@ -10,6 +10,7 @@
 # Copyright (c) 2014 Nathan Hoad
 # Copyright (c) 2014 dequis
 # Copyright (c) 2014 Tycho Andersen
+# Copyright (c) 2020 Robert Andrew Ditthardt
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -33,6 +34,10 @@ import math
 
 import cairocffi
 import xcffib.xproto
+from xcffib.wrappers import (
+    PixmapID,
+    GContextID,
+)
 
 from libqtile import pangocffi, utils
 
@@ -212,42 +217,56 @@ class Drawer:
     """
     def __init__(self, qtile, wid, width, height):
         self.qtile = qtile
-        self.wid, self.width, self.height = wid, width, height
-
-        self.pixmap = self.qtile.conn.conn.generate_id()
-        self.gc = self.qtile.conn.conn.generate_id()
-
-        self.qtile.conn.conn.core.CreatePixmap(
-            self.qtile.conn.default_screen.root_depth,
-            self.pixmap,
-            self.wid,
-            self.width,
-            self.height
-        )
-        self.qtile.conn.conn.core.CreateGC(
-            self.gc,
+        self.wid, self._width, self._height = wid, width, height
+        self._pixmap = None
+        self.gc = GContextID(qtile.conn.conn)
+        qtile.conn.conn.core.CreateGC(
+            self.gc.id,
             self.wid,
             xcffib.xproto.GC.Foreground | xcffib.xproto.GC.Background,
             [
                 self.qtile.conn.default_screen.black_pixel,
-                self.qtile.conn.default_screen.white_pixel
-            ]
+                self.qtile.conn.default_screen.white_pixel,
+            ],
         )
-        self.surface = cairocffi.XCBSurface(
-            qtile.conn.conn,
-            self.pixmap,
-            self.find_root_visual(),
-            self.width,
-            self.height,
+        # Will contain the "real" XCBSurface later
+        self._surface = None
+        self.surface = cairocffi.RecordingSurface(
+            cairocffi.CONTENT_COLOR_ALPHA,
+            None,
         )
         self.ctx = self.new_ctx()
         self.clear((0, 0, 1))
 
     def finalize(self):
-        self.qtile.conn.conn.core.FreeGC(self.gc)
-        self.qtile.conn.conn.core.FreePixmap(self.pixmap)
+        self.gc = None
         self.ctx = None
+        self._pixmap = None
         self.surface = None
+        self._surface = None
+
+    def __del__(self):
+        self.finalize()
+
+    @property
+    def width(self):
+        return self._width
+
+    @width.setter
+    def width(self, width):
+        if width > self._width:
+            self._surface = None
+        self._width = width
+
+    @property
+    def height(self):
+        return self._height
+
+    @height.setter
+    def height(self, height):
+        if height > self._height:
+            self._surface = None
+        self._height = height
 
     def _rounded_rect(self, x, y, width, height, linewidth):
         aspect = 1.0
@@ -302,10 +321,30 @@ class Drawer:
         height :
             the Y portion of the canvas to draw at the starting point.
         """
+        if self._surface is None:
+            self._pixmap = PixmapID(self.qtile.conn.conn)
+            self.qtile.conn.conn.core.CreatePixmap(
+                self.qtile.conn.default_screen.root_depth,
+                self._pixmap.id,
+                self.wid,
+                self.width,
+                self.height,
+            )
+            self._surface = cairocffi.XCBSurface(
+                self.qtile.conn.conn,
+                self._pixmap.id,
+                self.find_root_visual(),
+                self.width,
+                self.height,
+            )
+
+        ctx = cairocffi.Context(self._surface)
+        ctx.set_source_surface(self.surface, 0, 0)
+        ctx.paint()
         self.qtile.conn.conn.core.CopyArea(
-            self.pixmap,
+            self._pixmap.id,
             self.wid,
-            self.gc,
+            self.gc.id,
             0, 0,  # srcx, srcy
             offsetx, offsety,  # dstx, dsty
             self.width if width is None else width,
