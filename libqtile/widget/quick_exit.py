@@ -64,7 +64,7 @@ class QuickExit(base._TextBox):
         self.draw()
 
         if self.countdown == 0:
-            self.qtile.stop()
+            self.qtile.shutdown()
             return
 
     def cmd_trigger(self):
