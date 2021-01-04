@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import signal
+import threading
 from typing import Awaitable, Optional
 
 from libqtile.log_utils import logger
@@ -14,8 +15,12 @@ class QtileLoop(contextlib.AbstractAsyncContextManager):
 
     async def __aenter__(self) -> 'QtileLoop':
         loop = asyncio.get_running_loop()
-        loop.add_signal_handler(signal.SIGINT, self.qtile.shutdown)
-        loop.add_signal_handler(signal.SIGTERM, self.qtile.shutdown)
+        if threading.current_thread() is threading.main_thread():
+            # wait_fd only works on the main thread and we start this in a
+            # secondary thread in tests
+            loop.add_signal_handler(signal.SIGINT, self.qtile.shutdown)
+            loop.add_signal_handler(signal.SIGTERM, self.qtile.shutdown)
+        
         loop.set_exception_handler(self._handle_exception)
 
         with contextlib.suppress(ImportError):
@@ -33,8 +38,10 @@ class QtileLoop(contextlib.AbstractAsyncContextManager):
         await self._cancel_all_tasks()
 
         loop = asyncio.get_running_loop()
-        loop.remove_signal_handler(signal.SIGINT)
-        loop.remove_signal_handler(signal.SIGTERM)
+        if threading.current_thread() is threading.main_thread():
+            loop.remove_signal_handler(signal.SIGINT)
+            loop.remove_signal_handler(signal.SIGTERM)
+
         loop.set_exception_handler(None)
 
     async def _cancel_all_tasks(self):

@@ -28,6 +28,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 
@@ -270,6 +271,7 @@ class TestManager:
     def __init__(self, sockfile, display, debug_log):
         self.sockfile = sockfile
         self.display = display
+        self.session_manager = None
         self.log_level = logging.DEBUG if debug_log else logging.INFO
 
         self.proc = None
@@ -283,12 +285,16 @@ class TestManager:
             try:
                 kore = Core(display_name=self.display)
                 init_log(self.log_level, log_path=None, log_color=False)
-                q = SessionManager(kore, config_class(), fname=self.sockfile)
-                q.loop()
+                self.session_manager = SessionManager(
+                    kore,
+                    config_class(),
+                    fname=self.sockfile,
+                )
+                self.session_manager.loop()
             except Exception:
                 wpipe.send(traceback.format_exc())
 
-        self.proc = multiprocessing.Process(target=run_qtile)
+        self.proc = threading.Thread(target=run_qtile)
         self.proc.start()
 
         # First, wait for socket to appear
@@ -322,23 +328,8 @@ class TestManager:
         if self.proc is None:
             print("qtile is not alive", file=sys.stderr)
         else:
-            # try to send SIGTERM and wait up to 10 sec to quit
-            self.proc.terminate()
+            self.session_manager.qtile.shutdown()
             self.proc.join(10)
-
-            if self.proc.is_alive():
-                print("Killing qtile forcefully", file=sys.stderr)
-                # desperate times... this probably messes with multiprocessing...
-                try:
-                    os.kill(self.proc.pid, 9)
-                    self.proc.join()
-                except OSError:
-                    # The process may have died due to some other error
-                    pass
-
-            if self.proc.exitcode:
-                print("qtile exited with exitcode: %d" % self.proc.exitcode, file=sys.stderr)
-
             self.proc = None
 
         for proc in self.testwindows[:]:
